@@ -1,0 +1,412 @@
+globalvar define playingPlayers;
+globalvar define gameStarted = false;
+globalvar define playerTurn;
+
+globalvar define baseBeamLen = 1;
+globalvar define powerstep = 0.5;
+globalvar define gravMax = 250;
+globalvar define gravMin = 50;
+
+globalvar define mapXPos = 35;
+
+globalvar define meiDummy;
+globalvar define reinTeam1Dummy;
+globalvar define reinTeam2Dummy;
+globalvar define reinWallY = 6;
+globalvar define reinWallStep = 0.2;
+globalvar define reinWallMaxHeight = 15;
+globalvar define reinwallMinHeight = 5;
+
+
+globalvar define maxGas = 200;
+globalvar define gasDrainPerStep = 1;
+
+playervar define playerPosition;
+playervar define power = 50;
+playervar define gas = maxGas;
+playervar define laser;
+playervar define debugPow;
+
+rule: "Main"
+Event.OngoingPlayer
+if (IsButtonHeld(EventPlayer(), Button.Interact))
+{
+    gameStarted = true;
+}
+
+rule: "Init"
+Event.OngoingGlobal
+if (gameStarted)
+{
+    playingPlayers = AllPlayers();
+    ApplyHeroBalancing();
+    DistributeAndLockPlayers();
+    StartCamera(playingPlayers, Vector(0, 3, 0), Vector(1, 3, 0), 0); // place cameras
+    DisableAbilities();
+    playerTurn = 0;
+    CreateEffect(AllPlayers(), Effect.Sparkles, Color.Yellow, Vector(XOf(PositionOf(playingPlayers[playerTurn])), YOf(PositionOf(playingPlayers[playerTurn])) + 1, ZOf(PositionOf(playingPlayers[playerTurn]))), 1, EffectRev.PositionAndRadius);
+    CreateWallDummy();
+    CreateReinWallDummies();
+
+    ForceThrottle(playingPlayers, 0, 1, 0, 1, 0, 0);
+    StartTransformingThrottle(playingPlayers, 1, 1, Vector(1, 0, 0));
+}
+
+void ApplyHeroBalancing()
+{
+    foreach (define p in playingPlayers)
+    {
+        SetJumpEnabled(p, false);
+        SetCrouchEnabled(p, false);
+        SetKnockbackReceived(p, 175);
+
+        if (HeroOf(p) == Hero.Zarya)
+        {
+            SetHealingReceived(p, 0); // disable shield regen
+            SetPlayerHealth(p, 200);
+            SetDamageDealt(p, 175);
+        }
+        else if (HeroOf(p) == Hero.Junkrat)
+        {
+            SetDamageDealt(p, 40);
+        }
+    }
+}
+
+void DistributeAndLockPlayers()
+{
+    foreach (define p in playingPlayers)
+    {
+        Vector pos = Vector.Zero;
+
+        if (TeamOf(p) == Team.Team1)
+        {
+            pos = Vector(35, 0, RandomReal(15, 40));
+        }
+        else
+        {
+            pos = Vector(35, 0, RandomReal(-15, -40));
+        }
+        p.playerPosition = pos;
+        LockPlayerPosition(p);
+    }
+}
+
+void LockPlayerPosition(define p)
+{
+    StartForcingPlayerPosition(p, p.playerPosition, false);
+}
+
+void DisableAbilities()
+{
+    SetAbility1Enabled(playingPlayers, false);
+    SetAbility2Enabled(playingPlayers, false);
+    SetUltimateAbilityEnabled(playingPlayers, false);
+    SetPrimaryFireEnabled(playingPlayers, false);
+    SetSecondaryFireEnabled(playingPlayers, false);
+    SetMaxAmmo(playingPlayers, 0, 1);
+    SetAmmo(playingPlayers, 0, 1);
+}
+void EnableAbilities()
+{
+    foreach(define p in playingPlayers)
+    {
+        SetAbility1Enabled(playingPlayers, true);
+        SetAbility2Enabled(playingPlayers, true);
+        SetUltimateAbilityEnabled(playingPlayers, true);
+        SetPrimaryFireEnabled(playingPlayers, true);
+        SetSecondaryFireEnabled(playingPlayers, true);
+    }
+}
+
+void CreateWallDummy()
+{
+    CreateDummyBot(Hero.Mei, Team.Team1, -1, Vector.Zero, Vector.Zero);
+
+    meiDummy = PlayersOnHero(Hero.Mei, Team.Team1);
+
+    // lock in middle of map looking down
+    StartForcingPlayerPosition(meiDummy, Vector(35, 1, 0), false);
+    StartFacing(meiDummy, Down(), 10000, Relative.ToWorld, FacingRev.None);
+
+    // make invisible and disable collisons
+    SetInvisible(meiDummy, InvisibleTo.All);
+    DisableMovementCollisionWithEnvironment(meiDummy, true);
+    DisableMovementCollisionWithPlayers(meiDummy);
+}
+
+void CreateReinWallDummies()
+{
+    CreateDummyBot(Hero.Reinhardt, Team.Team1, -1, Vector.Zero, Vector.Zero);
+    CreateDummyBot(Hero.Reinhardt, Team.Team2, -1, Vector.Zero, Vector.Zero);
+
+    reinTeam1Dummy = PlayersOnHero(Hero.Reinhardt, Team.Team1);
+    reinTeam2Dummy = PlayersOnHero(Hero.Reinhardt, Team.Team2);
+
+    // force position. will re-eval based on reinWallY updated in another rule
+    StartForcingPlayerPosition(reinTeam1Dummy, Vector(mapXPos, reinWallY, 0), true);
+    StartForcingPlayerPosition(reinTeam2Dummy, Vector(mapXPos, reinWallY, 0), true);
+
+    // face opposite team
+    StartFacing(reinTeam1Dummy, Backward(), 10000, Relative.ToWorld, FacingRev.None);
+    StartFacing(reinTeam2Dummy, Forward(), 10000, Relative.ToWorld, FacingRev.None);
+    
+    // hold shield
+    StartHoldingButton(reinTeam1Dummy, Button.SecondaryFire);
+    StartHoldingButton(reinTeam2Dummy, Button.SecondaryFire);
+
+    // make invulnerable
+    SetDamageReceived(reinTeam1Dummy, 0);
+    SetDamageReceived(reinTeam2Dummy, 0);
+}
+
+void Apply2DMovement()
+{
+    
+}
+
+rule: "Update player position"
+Event.OngoingPlayer
+if (gameStarted && !IsDummyBot(EventPlayer())) 
+{
+    while (gameStarted) 
+    {
+        playerPosition = PositionOf(EventPlayer());
+        Wait(0.016);
+    }
+}
+
+rule: "Disable X Rotation"
+Event.OngoingPlayer
+if (gameStarted && !IsDummyBot(EventPlayer()))
+{
+    while (gameStarted)
+    {
+        Vector curRot = FacingDirectionOf(EventPlayer());
+        if (AbsoluteValue(XOf(curRot)) >= 0.01)
+        {
+            SetFacing(EventPlayer(), Vector(0, YOf(curRot), ZOf(curRot)));
+        }
+        Wait(0.016);
+    }
+}
+
+rule: "Disable X Movement"
+Event.OngoingPlayer
+if (gameStarted && !IsDummyBot(EventPlayer()))
+{
+    while (gameStarted)
+    {
+        Vector curPos = PositionOf(EventPlayer());
+
+        if (AbsoluteValue(mapXPos - XOf(curPos)) >= 0.01)
+        {
+            Teleport(EventPlayer(), Vector(mapXPos, YOf(curPos), ZOf(curPos)));
+        }
+        Wait(0.016);
+    }
+}
+
+rule: "Rule for player who's turn it is"
+Event.OngoingPlayer
+if (gameStarted && playingPlayers[playerTurn] == EventPlayer())
+{
+    if (HeroOf(EventPlayer()) == Hero.Zarya)
+        SetSecondaryFireEnabled(EventPlayer(), true);
+    else if (HeroOf(EventPlayer()) == Hero.Junkrat)
+        SetPrimaryFireEnabled(EventPlayer(), true);
+
+    gas = maxGas;
+    CreateBeamEffect(AllPlayers(Team.All), BeamType.GoodBeam, EyePosition(EventPlayer()), EyePosition(EventPlayer()) + (FacingDirectionOf(EventPlayer()) * baseBeamLen) + (FacingDirectionOf(EventPlayer()) * power / 50 * 3), Color.Purple);
+    laser = LastCreatedEntity();
+    UpdateProjGravity(EventPlayer());
+    StopForcingPlayerPosition();
+}
+
+rule: "Subtract gas for moving"
+Event.OngoingPlayer
+if (gameStarted && SpeedOf(EventPlayer()) > 0.1 && !IsDummyBot(EventPlayer()))
+{
+    while (SpeedOf(EventPlayer()) > 0.1)
+    {
+        gas -= gasDrainPerStep;
+        if (gas <= 0 && IsOnGround(EventPlayer()))
+        {
+            // set y to 0 before locking position. fixes problem where y may be -0.0 causing you to clip through the floor
+            playerPosition = Vector(XOf(playerPosition), 0, ZOf(playerPosition));
+            LockPlayerPosition(EventPlayer());
+            break;
+        }
+        Wait(0.016);
+    }
+}
+
+rule: "Pass turn after shooting"
+Event.OngoingPlayer
+if (gameStarted && EventPlayer() == playingPlayers[playerTurn] && (IsFiringPrimary(EventPlayer()) || IsFiringSecondary(EventPlayer()) || IsUsingAbility2(EventPlayer())))
+{
+    // get rid of aiming laser
+    DestroyEffect(laser);
+
+    // relock this player's position
+    LockPlayerPosition(EventPlayer());
+
+    // redisable attacks (jank lmao whgo care)
+    SetPrimaryFireEnabled(EventPlayer(), false);
+    SetSecondaryFireEnabled(EventPlayer(), false);
+
+    // advance global var to next player
+    playerTurn++;
+    if (playingPlayers[playerTurn] == null)
+    {
+        playerTurn = 0;
+    }
+
+    //BigMessage(AllPlayers(), <"<0>'s turn", playingPlayers[playerTurn]>);
+}
+
+rule: "Increase Power"
+Event.OngoingPlayer
+if (IsButtonHeld(EventPlayer(), Button.Jump))
+{
+    while (IsButtonHeld(EventPlayer(), Button.Jump))
+    {
+        power += powerstep;
+        if (power > 100) power = 100;
+        UpdateProjGravity(EventPlayer());
+        Wait(0.016);
+    }
+}
+
+rule: "Decrease Power"
+Event.OngoingPlayer
+if (IsButtonHeld(EventPlayer(), Button.Crouch))
+{
+    while (IsButtonHeld(EventPlayer(), Button.Crouch))
+    {
+        power -= powerstep;
+        if (power < 0) power = 0;
+        UpdateProjGravity(EventPlayer());
+        Wait(0.016);
+    }
+}
+
+void UpdateProjGravity(define ep)
+{
+    define g = (gravMax - gravMin) * ((100 - power) / 100) + gravMin;
+    debugPow = g;
+    SetProjectileGravity(ep, g);
+}
+
+rule: "Flip"
+Event.OngoingPlayer
+if (IsButtonHeld(EventPlayer(), Button.Reload))
+{
+    define curface = FacingDirectionOf(EventPlayer());
+    curface = Vector(XOf(curface), YOf(curface), ZOf(curface) * -1);
+    SetFacing(EventPlayer(), curface, Relative.ToWorld);
+}
+
+rule: "EndGame(Avengers)"
+Event.OngoingPlayer
+if (IsDead(EventPlayer()))
+{
+    playingPlayers = RemoveFromArray(playingPlayers, EventPlayer());
+    define team1players = 0;
+    define team2players = 0;
+    foreach (define p in playingPlayers)
+    {
+        if (TeamOf(p) == Team.Team1) team1players++;
+        else team2players++;
+    }
+    if (team1players == 0) End(2);
+    if (team2players == 0) End(1);
+
+}
+
+void End(define winner)
+{
+    define winnerlist = "";
+
+    gameStarted = false;
+    foreach (define p in playingPlayers)
+    {
+        StopCamera(p);
+        StopForcingPlayerPosition(p);
+        EnableAbilities();
+        DestroyAllEffects();
+        DestroyAllDummyBots();
+
+        if ((TeamOf(p) == Team.Team1 && winner == 1) || (TeamOf(p) == Team.Team2 && winner == 2))
+            winnerlist += p; 
+    }
+    BigMessage(AllPlayers(), <"Team <0> wins\n<1>", winner, winnerlist>);
+}
+
+rule: "antistuck"
+Event.OngoingPlayer
+if (IsCommunicating(EventPlayer(), Communication.NeedHealing))
+{
+    StartFacing(EventPlayer(), Right(), 10000, Relative.ToWorld, FacingRev.None);
+    Wait(0.250);
+    StopFacing();
+}
+
+rule: "Mei Wall Control"
+Event.OngoingGlobal
+if (gameStarted)
+{
+    // inconsistent first wall without this special first case code
+    Wait(0.1);
+    PressButton(meiDummy, Button.Ability2);
+    PressButton(meiDummy, Button.PrimaryFire);
+    Wait(5.23);
+    while (gameStarted)
+    {
+        PressButton(meiDummy, Button.Ability2);
+        PressButton(meiDummy, Button.PrimaryFire);
+        Wait(5.23);
+    }
+}
+
+rule: "Move reinhardts up and down"
+Event.OngoingGlobal
+if (gameStarted)
+{
+    define rising = true;
+    while (gameStarted)
+    {
+        if (rising) reinWallY += reinWallStep;
+        else reinWallY -= reinWallStep;
+
+        // flip moving up and down when reaching boundary
+        if (reinWallY <= reinwallMinHeight || reinWallY >= reinWallMaxHeight) rising = !rising;
+
+        Wait(0.016);
+    }
+}
+
+rule: "Instructions"
+Event.OnPlayerJoin
+{
+    //CreateHudText(EventPlayer(), "Controls", "lorem ipsum", "Jump - Increase Power\nCrouch - Decrease Power\nCall 'Need Healing' - Unstuck Mouse", Location.Right, null, Color.White, Color.White, Color.White, HudTextRev.None, Spectators.DefaultVisibility);
+}
+
+rule: "Debug"
+Event.OnPlayerJoin
+{
+    CreateHudText(EventPlayer(), <"pos: <0>", PositionOf(EventPlayer())>, null, null, Location.Left, null, Color.White, null, null, HudTextRev.String, Spectators.DefaultVisibility);
+    CreateHudText(EventPlayer(), <"rot: <0>", FacingDirectionOf(EventPlayer())>, null, null, Location.Left, null, Color.White, null, null, HudTextRev.String, Spectators.DefaultVisibility);
+    CreateHudText(EventPlayer(), <"power: <0>", power>, null, null, Location.Top, null, Color.White, null, null, HudTextRev.String, Spectators.DefaultVisibility);
+    CreateHudText(EventPlayer(), <"gas: <0>", gas>, null, null, Location.Top, null, Color.White, null, null, HudTextRev.String, Spectators.DefaultVisibility);
+    CreateHudText(EventPlayer(), <"gravity: <0>", debugPow>, null, null, Location.Top, null, Color.White, null, null, HudTextRev.String, Spectators.DefaultVisibility);
+    if (!IsDummyBot(EventPlayer()))
+        CreateDummyBot(Hero.Junkrat, Team.Team2, -1, Vector.Zero, Vector.Zero);
+}
+
+rule: "deb2"
+Event.OngoingPlayer
+if (IsButtonHeld(EventPlayer(), Button.Ability1))
+{
+    PressButton(PlayersOnHero(Hero.Junkrat), Button.PrimaryFire);
+}
